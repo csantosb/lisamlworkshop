@@ -1,0 +1,45 @@
+* How to run
+
+Problem is, as long as I enter =$GUIX_PROFILE= in the cluster, or =$GUIX_PROFILE_DEVEL= locally, I’m
+unable to import libraries properly. So I need to do all the conda stuff out of the guix profiles.
+
+TODO: How to fix ?
+
+** Locally
+
+- Under zsh, initialize un =.zshrc= conda with
+
+  #+begin_src shell
+    # >>> conda initialize >>>
+    # !! Contents within this block are managed by 'conda init' !!
+    __conda_setup="$('$HOME/.guix-profiles/devel/guix-profile/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
+    if [ $? -eq 0 ]; then
+        eval "$__conda_setup"
+    else
+        if [ -f "$HOME/.guix-profiles/devel/guix-profile/etc/profile.d/conda.sh" ]; then
+            . "$HOME/.guix-profiles/devel/guix-profile/etc/profile.d/conda.sh"
+        else
+            export PATH="$HOME/.guix-profiles/devel/guix-profile/bin:$PATH"
+        fi
+    fi
+    unset __conda_setup
+    # <<< conda initialize <<<
+  #+end_src
+
+  - cd to the repo
+
+  - Don’t change to devel guix env
+
+  - conda activate environment
+
+  - jupyter notebook --no-browser
+
+** Cluster
+
+- Out of the profile, module load conda
+
+- cd to the repo
+
+- conda activate environment
+
+- jupyter notebook --no-browser
