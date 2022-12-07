@@ -1,4 +1,421 @@
-* How to run
+* Table of Contents :TOC:
+:PROPERTIES:
+:VISIBILITY: all
+:END:
+
+- [[#about][About]]
+- [[#use-with-guix][Use with guix]]
+  - [[#scripts][Scripts]]
+    - [[#channels][Channels]]
+    - [[#manifest][Manifest]]
+    - [[#notebook][Notebook]]
+    - [[#container][Container]]
+  - [[#deploy][Deploy]]
+    - [[#pack][Pack]]
+    - [[#call][Call]]
+  - [[#dir-locals][Dir locals]]
+  - [[#guix-channel][Guix channel]]
+  - [[#project-examples][Project examples]]
+  - [[#server-test-code][Server test code]]
+- [[#use-with-conda][Use with conda]]
+  - [[#locally][Locally]]
+  - [[#cluster][Cluster]]
+
+* About
+
+This file includes necessary instructions to run this project within a dedicated environment using
+[[https://guix.gnu.org/][GNU Guix]].
+
+Contents are strongly based on own project’s documentation.
+
+* Use with guix
+
+[[https://orgmode.org/manual/Extracting-Source-Code.html][Tangle]] all the code blocks, and call the =guix-container-LIDA1.sh= script to create the container and
+run the notebook in there.
+
+** Scripts
+
+*** Channels
+
+This is the list of channel’s versions.
+
+As for [2022-11-11 ven.]
+
+#+begin_src scheme :tangle (format "%s/lida1/channels.scm" (getenv "TMPDIR")) :padline no :mkdirp yes :tangle-mode (identity #o444)
+  (list
+   (channel
+    (name 'guix)
+    (url "https://git.savannah.gnu.org/git/guix.git")
+    (branch "master")
+    (commit
+     "3e3f3a332ddecbf661afd0ae0730d220cfcd4429")
+    (introduction
+     (make-channel-introduction
+      "9edb3f66fd807b096b48283debdcddccfea34bad"
+      (openpgp-fingerprint
+       "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
+   (channel
+    (name 'guix-science)
+    (url "https://github.com/guix-science/guix-science.git")
+    (branch "master")
+    (commit
+     "5993cb79373293bb705970c4702b971f4e1d96b5")
+    (introduction
+     (make-channel-introduction
+      "5993cb79373293bb705970c4702b971f4e1d96b5"
+      (openpgp-fingerprint
+       "CA4F 8CF4 37D7 478F DA05  5FD4 4213 7701 1A37 8446")))))
+#+end_src
+
+*** Manifest
+
+I will install ="barviz"= and ="fidle"= manually within the container in a permanent storage (see
+=notebook.sh= below).
+
+="python-plotly"= if pulled by =barviz= anyway (??), so I don’t include it in the manifest.
+
+="python-tenacity"= may be included here, though, which avoids being pulled by =barviz=.
+
+#+begin_src scheme :tangle (format "%s/lida1/manifest.scm" (getenv "TMPDIR")) :padline no :mkdirp yes :tangle-mode (identity #o444)
+  (specifications->manifest
+   (list
+    "bash"
+    "coreutils"
+    "which"
+    "mg"
+    "gcc-toolchain"
+    "nss-certs"
+    "python"
+    "python-h5py"
+    "python-numpy"
+    "python-pip"
+    "python-jupyterlab"
+    "python-tables"
+    "python-jupyter-console"
+    "python-matplotlib"
+    "python-scipy"
+    "python-pytdi"
+    ;; "python-pyfftw"
+    "python-scikit-learn"
+    "python-pytorch"
+    "python-astropy"
+    "python-emcee"
+    "python-lisaconstants"
+    "python-pyerfa"
+    "python-dynesty"
+    "python-tqdm"
+    "python-dill"
+    "python-pyjwt"
+    "python-seaborn"))
+#+end_src
+
+*** Notebook
+
+Launch the notebook server within the container. Install fidle if not alredy done.
+
+#+begin_src sh :tangle (format "%s/lida1/.local/bin/notebook" (getenv "TMPDIR")) :shebang #!/bin/sh :mkdirp yes :tangle-mode (identity #o544)
+  #######################################################################
+  #  DON'T MODIFY THIS FILE. INSTEAD, MODIFY ITS CORRESPONDING PAGE !!! #
+  #######################################################################
+
+  # Test if fidle not yet installed, then install it along with barviz
+  [ ! -d $HOME/.local/lib/python3.9/site-packages ] && \
+      pip3 install lisagwresponse==2.1.2 && \
+      pip3 install bilby[gw]==1.3.0
+
+  # start the notebook
+  jupyter notebook --config=~/.jupyter/jupyter_notebook_config.py --no-browser --notebook-dir=.
+#+end_src
+
+*** Container
+
+Run it as =lida1-container.sh notebook=, etc.
+
+#+begin_src sh :tangle (format "%s/bin/lida1-container.sh" (getenv "TMPDIR")) :shebang #!/bin/sh :mkdirp yes :tangle-mode (identity #o544)
+  [[ -z $TMPDIR ]] && export TMPDIR=/tmp
+
+  mkdir -p $TMPDIR/lida1/.local/{bin,lib} # I will install things locally in here
+
+  if [ "$#" -eq 1 ]; then
+      OP=$1
+  elif [ "$#" -eq 0 ]; then
+      OP=bash
+  fi
+
+  export SSL_CERT_DIR="$HOME/.guix-profile/etc/ssl/certs"
+  export SSL_CERT_FILE="$HOME/.guix-profile/etc/ssl/certs/ca-certificates.crt"
+  LIDA1_SCRIPTS_DIR=$TMPDIR/lida1
+  _GUIX=$(which guix)
+  PATH=$HOME/.guix-profile/bin:$HOME/.local/bin
+
+  $_GUIX time-machine -C $LIDA1_SCRIPTS_DIR/channels.scm -- \
+         shell \
+         -C \
+         -L $PWD/guix-channel \
+         --link-profile \
+         --share=$LIDA1_SCRIPTS_DIR/.local=$HOME/.local \
+         --share=$HOME/.jupyter \
+         --network \
+         --preserve='^PATH$' \
+         --preserve='^SSL_CERT_DIR$' \
+         --preserve='^SSL_CERT_FILE$' \
+         -m $LIDA1_SCRIPTS_DIR/manifest.scm -- $OP
+#+end_src
+
+** Deploy
+
+*** Pack
+
+Create a singularity image
+
+#+begin_src sh :tangle (format "%s/bin/lida1-pack.sh" (getenv "TMPDIR")) :shebang #!/bin/sh :mkdirp yes :tangle-mode (identity #o544)
+  [[ -z $TMPDIR ]] && export TMPDIR=/tmp
+  LIDA1_SCRIPTS_DIR=$TMPDIR/lida1
+  _GUIX=$(which guix)
+
+  $_GUIX time-machine -C $LIDA1_SCRIPTS_DIR/channels.scm -- \
+         pack \
+         -L $PWD/guix-channel \
+         -S /include=include -S /lib=lib -S /etc_=etc -S /libexec=libexec -S /share=share \
+         --compression=xz \
+         --save-provenance \
+         -f squashfs \
+         -m $LIDA1_SCRIPTS_DIR/manifest.scm
+#+end_src
+
+*** Call
+
+Use singularity image to pop-up an environment. Local and remote (cc) combined version.
+
+#+begin_src sh :tangle (format "%s/bin/lida1-image.sh" (getenv "TMPDIR")) :shebang #!/bin/sh :mkdirp yes :tangle-mode (identity #o544)
+  [[ -z $TMPDIR ]] && export TMPDIR=/tmp
+  LIDA1_SCRIPTS_DIR=$TMPDIR/lida1
+
+  if [ "$#" -eq 1 ]; then
+      OP=bash
+      COMMAND=shell
+  elif [ "$#" -eq 0 ]; then
+      OP=bash
+      COMMAND=shell
+  fi
+
+  myhost=$(uname -n)
+  myhost=${myhost:0:3}
+
+  _IMG=lisamlworkshop.xz.squashfs
+  DEF_OPTS="-B $LIDA1_SCRIPTS_DIR/.local:$HOME/.local -B $HOME/.jupyter $_IMG $OP"
+  DEF_OPTS="-B $LIDA1_SCRIPTS_DIR/.local:$HOME/.local -B $PWD -B $HOME/.jupyter -B $HOME/.cache  -B $HOME/.config $_IMG $OP"
+
+  if [[ $myhost == "cca" ]]
+  then
+      OPTS="$COMMAND -B /scratch:/scratch $DEF_OPTS"
+  else
+      OPTS+="$COMMAND --no-home $DEF_OPTS"
+  fi
+
+  echo $OPTS
+  singularity $OPTS
+#+end_src
+
+** Dir locals
+
+Setting =ein:url-localhost= is needed so that =ob-ein=
+(https://github.com/millejoh/emacs-ipython-notebook#ob-ein) connects to the jupyter notebook server
+inside a guix container. Out of the container, it’s not necessary. As for [[file:~/Nextcloud_cnrs/CsbWiki/ein.org::*Troubleshooting][ein:Troubleshooting]].
+
+See: https://github.com/millejoh/emacs-ipython-notebook/issues/728
+
+#+begin_src emacs-lisp :tangle .dir-locals.el :mkdirp yes :tangle-mode (identity #o544)
+  ((nil . ((ein:url-localhost . "")
+           (csb/notebook-server . "/tmp/bin/guix-container-LIDA1.sh notebook")))
+   (python-mode . ((eval . (progn
+                             (setq python-shell-interpreter "/tmp/bin/guix-container-FIDLE-ipython.sh")
+                             (setq python-shell-interpreter-args "--simple-prompt"))))))
+#+end_src
+
+There must be a more elegant way ...
+
+#+begin_src sh :tangle (format "%s/bin/guix-container-FIDLE-ipython.sh" (getenv "TMPDIR")) :shebang #!/bin/sh :mkdirp yes :tangle-mode (identity #o544)
+  $TMPDIR/bin/guix-container-LIDA1.sh ipython3
+#+end_src
+
+** Guix channel
+
+#+begin_src scheme :tangle "./guix-channel/python/packages/python-xyz.scm" :mkdirp yes :tangle-mode (identity #o544) :padline yes
+  (define-module (python packages python-xyz)
+    #:use-module (guix i18n)
+    #:use-module (guix packages)
+    #:use-module (guix download)
+    #:use-module (guix git-download)
+    #:use-module (guix build-system python)
+    #:use-module (gnu packages python-xyz)
+    #:use-module (gnu packages machine-learning)
+    #:use-module (gnu packages python-build)
+    #:use-module (gnu packages sphinx)
+    #:use-module (gnu packages algebra)
+    #:use-module (gnu packages python-science)
+    #:use-module (gnu packages commencement)
+    #:use-module (gnu packages base)
+    #:use-module (gnu packages check))
+
+  (define-public python-pytdi
+    (package
+     (name "python-pytdi")
+     (version "1.2.1")
+     (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "pytdi" version))
+              (sha256
+               (base32
+                "0mrchxys8bhz5l38dbyymswz4aghjcp7gakr5ihi5hgvs7vxszd6"))))
+     (build-system python-build-system)
+     (propagated-inputs (list python-numpy python-packaging python-pytest python-h5py python-scipy))
+     (home-page "https://gitlab.in2p3.fr/LISA/LDPG/wg6_inrep/pytdi")
+     (synopsis "Python implementation of time-delay interferometry algorithms.")
+     (description
+      "Python implementation of time-delay interferometry algorithms.")
+     (license #f)))
+
+  (define-public python-dynesty
+    (package
+     (name "python-dynesty")
+     (version "1.0.0")
+     (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "dynesty" version))
+              (sha256
+               (base32
+                "01gbyg8b7wxnjzgzhz06ymbabscrpnyqgzkrp9m9vimk841iv26c"))))
+     (build-system python-build-system)
+     (propagated-inputs (list python-matplotlib python-numpy python-scipy
+                              python-six))
+     (home-page "https://github.com/joshspeagle/dynesty")
+     (synopsis
+      "A dynamic nested sampling package for computing Bayesian posteriors and evidences.")
+     (description
+      "This package provides a dynamic nested sampling package for computing Bayesian
+  posteriors and evidences.")
+     (license #f)))
+
+  (define-public python-emcee
+    (package
+     (name "python-emcee")
+     (version "3.1.3")
+     (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "emcee" version))
+              (sha256
+               (base32
+                "1l6a9w4nsymsalav8zkfvlj42z5qxj2hdng0g4ml00rziarnas7v"))))
+     (build-system python-build-system)
+     (propagated-inputs (list python-numpy
+                              python-wheel
+                              python-setuptools-scm))
+     (native-inputs (list python-coverage python-pytest python-pytest-cov))
+     (home-page "https://emcee.readthedocs.io")
+     (synopsis "The Python ensemble sampling toolkit for MCMC")
+     (description "The Python ensemble sampling toolkit for MCMC")
+     (license #f)))
+
+  (define-public python-lisaconstants
+    (package
+     (name "python-lisaconstants")
+     (version "1.3.4")
+     (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "lisaconstants" version))
+              (sha256
+               (base32
+                "15nzsqf85iz7pyj5xakkc1y8xcp0dk0bxa3yvps2lcr1iksmna8w"))))
+     (build-system python-build-system)
+     (native-inputs (list python-pytest))
+     (home-page "https://gitlab.in2p3.fr/lisa-simulation/constants")
+     (synopsis
+      "LISA Python Constants provides values sanctioned by the LISA Consortium for physical constants and mission parameters.")
+     (description
+      "LISA Python Constants provides values sanctioned by the LISA Consortium for
+  physical constants and mission parameters.")
+     (license #f)))
+
+  (define-public python-pyfftw
+    (package
+     (name "python-pyfftw")
+     (version "0.13.0")
+     (source (origin
+              (method url-fetch)
+              (uri (pypi-uri "pyFFTW" version))
+              (sha256
+               (base32
+                "1njk89w77f4l128c615jdi0dha873aq9k7migvarbgf00lj111fs"))))
+     (build-system python-build-system)
+     (propagated-inputs (list python-numpy python-cython fftw))
+     (home-page "https://github.com/pyFFTW/pyFFTW")
+     (synopsis
+      "A pythonic wrapper around FFTW, the FFT library, presenting a unified interface for all the supported transforms.")
+     (description
+      "This package provides a pythonic wrapper around FFTW, the FFT library,
+  presenting a unified interface for all the supported transforms.")
+     (license #f)))
+#+end_src
+
+** Project examples
+
+#+NAME: 4b0a6155-0dec-4cab-8c60-6f0243e93897
+#+begin_src ein-python
+  import tensorflow as tf
+  print(tf.__version__)
+#+end_src
+
+#+RESULTS: 4b0a6155-0dec-4cab-8c60-6f0243e93897
+:
+: 1.9.0
+
+#+NAME: ec40f601-d749-426d-9e1e-1c7d26eaa2e3
+#+begin_src ein-python
+  print(tf.test.is_built_with_cuda())
+#+end_src
+
+#+RESULTS: ec40f601-d749-426d-9e1e-1c7d26eaa2e3
+: False
+
+#+NAME: 85b275b6-384f-4dec-a29c-c1bf471d6666
+#+begin_src ein-python
+  print(tf.config.list_physical_devices('GPU'))
+#+end_src
+
+#+RESULTS: 85b275b6-384f-4dec-a29c-c1bf471d6666
+: ---------------------------------------------------------------------------
+: AttributeError                            Traceback (most recent call last)
+: Input In [5], in <cell line: 1>()
+: ----> 1 print(tf.config.list_physical_devices('GPU'))
+:
+: AttributeError: module 'tensorflow' has no attribute 'config'
+
+** Server test code
+
+First, remember to set this when running notebook server under =guix=
+
+#+begin_src emacs-lisp
+  (setq ein:url-localhost "")
+#+end_src
+
+#+RESULTS:
+
+Then, test the server with [[file:~/Nextcloud_cnrs/CsbWiki/ein.org::*Python][this]] code.
+
+It might happen that =ein= doesnt know how to connnect to the server. In this case, run this before
+the previous
+
+#+NAME: 36deef35-7ac0-4111-9a60-fd56b89b71b7
+#+begin_src ein-python
+  print("Test takes %s" % 8)
+#+end_src
+
+#+RESULTS: 36deef35-7ac0-4111-9a60-fd56b89b71b7
+: Test takes 8
+
+
+* Use with conda
 
 Problem is, as long as I enter =$GUIX_PROFILE= in the cluster, or =$GUIX_PROFILE_DEVEL= locally, I’m
 unable to import libraries properly. So I need to do all the conda stuff out of the guix profiles.
